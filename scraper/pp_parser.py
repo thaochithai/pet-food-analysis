@@ -82,41 +82,6 @@ class AmazonProductHTMLParser:
             logger.warning(f"Error extracting brand: {e}")
             return None
 
-    def _extract_color(self, soup):
-        try:
-            # color swatches
-            swatches = soup.select("#variation_color_name li")
-            for swatch in swatches:
-                if "selected" in swatch.get("class", []):
-                    return swatch.get("title", "").replace("Click to select ", "")
-            
-            # color dropdown
-            color_dropdown = soup.select_one("#native_dropdown_selected_color_name")
-            if color_dropdown:
-                return color_dropdown.get_text().strip()
-            
-            # product details section
-            color_labels = soup.find_all("th", class_="a-color-secondary")
-            for label in color_labels:
-                if "color" in label.get_text().lower():
-                    value = label.find_next("td")
-                    if value:
-                        return value.get_text().strip()
-            
-            # technical details
-            spec_rows = soup.select("tr.a-spacing-small")
-            for row in spec_rows:
-                header = row.select_one("td:first-child, th:first-child")
-                if header and "color" in header.get_text().lower():
-                    value = row.select_one("td:last-child, td:nth-child(2)")
-                    if value:
-                        return value.get_text().strip()
-            
-            return None
-        except Exception as e:
-            logger.warning(f"Error extracting color: {e}")
-            return None
-
     def _extract_categories(self, soup):
         try:
             categories = []
@@ -246,6 +211,96 @@ class AmazonProductHTMLParser:
             
         return {'scrape_date': None, 'scrape_time': None}
 
+    def _extract_price_per_unit(self, soup):
+        try:
+            # canonical price-per-unit container
+            price_per_unit = soup.select_one("span.pricePerUnit")
+            if price_per_unit:
+                text = price_per_unit.get_text(separator=" ").strip()
+                text = text.replace('(', '').replace(')', '')
+                text = re.sub(r"\s+", " ", text)
+                return text if text else None
+
+            # Alternative selector patterns
+            alternative_selectors = [
+                ".a-price-per-unit",
+                ".pricePerUnit .a-price",
+                "[data-testid='price-per-unit']"
+            ]
+            for selector in alternative_selectors:
+                element = soup.select_one(selector)
+                if element:
+                    text = element.get_text(separator=" ").strip()
+                    text = re.sub(r"\s+", " ", text)
+                    return text if text else None
+
+            return None
+        except Exception as e:
+            logger.warning(f"Error extracting price per unit: {e}")
+            return None
+        
+    def _extract_product_details_table(self, soup):
+        try:
+            product_details = {}
+            
+            # Look for the product details table
+            table = soup.select_one("table.a-normal.a-spacing-micro")
+            if table:
+                rows = table.select("tr")
+                for row in rows:
+                    # Get the label (first column)
+                    label_cell = row.select_one("td:first-child span.a-text-bold")
+                    # Get the value (second column)
+                    value_cell = row.select_one("td.a-span9 span.po-break-word")
+                    
+                    if label_cell and value_cell:
+                        label = label_cell.get_text().strip()
+                        value = value_cell.get_text().strip()
+                        product_details[label.lower().replace(' ', '_')] = value
+            
+            # Alternative approach - look for specific class-based rows
+            detail_rows = soup.select("tr[class*='po-']")
+            for row in detail_rows:
+                label_cell = row.select_one("td:first-child span")
+                value_cell = row.select_one("td:last-child span")
+                
+                if label_cell and value_cell:
+                    label = label_cell.get_text().strip()
+                    value = value_cell.get_text().strip()
+                    product_details[label.lower().replace(' ', '_')] = value
+            
+            return product_details if product_details else None
+        except Exception as e:
+            logger.warning(f"Error extracting product details table: {e}")
+            return None
+        
+    def _extract_image_url(self, soup):
+        """
+        Extract main product image URL from Amazon product page.
+        """
+        try:
+            # Primary landing image
+            img = soup.select_one("#landingImage")
+            if img and img.get("src"):
+                return img["src"]
+
+            # Wrapper fallback
+            img = soup.select_one("#imgTagWrapperId img")
+            if img and img.get("src"):
+                return img["src"]
+
+            # Thumbnail images (first one as fallback)
+            thumbnails = soup.select("#altImages img")
+            for thumb in thumbnails:
+                src = thumb.get("src")
+                if src:
+                    return src
+
+            return None
+        except Exception as e:
+            logger.warning(f"Error extracting image URL: {e}")
+            return None
+
     def parse_product_html_file(self, html_file, search_term=None):
         try:
             logger.info(f"Parsing file: {html_file}")
@@ -265,11 +320,13 @@ class AmazonProductHTMLParser:
             # product details
             title = self._extract_title(soup)
             brand = self._extract_brand(soup)
-            color = self._extract_color(soup)
             categories = self._extract_categories(soup)
             bullet_points = self._extract_bullet_points(soup)
             description = self._extract_description(soup)
             bestseller_rank = self._extract_bestseller_rank(soup)
+            price_per_unit = self._extract_price_per_unit(soup)
+            product_details = self._extract_product_details_table(soup)
+            image_url = self._extract_image_url(soup)
             
             # result object
             result = {
@@ -279,11 +336,13 @@ class AmazonProductHTMLParser:
                 'scrape_time': datetime_info.get('scrape_time'),
                 'title': title,
                 'brand': brand,
-                'color': color,
                 'categories': categories,
                 'bullet_points': bullet_points,
                 'description': description,
-                'bestseller_rank': bestseller_rank
+                'bestseller_rank': bestseller_rank,
+                'price_per_unit': price_per_unit,
+                'product_details': product_details,
+                'image_url': image_url
             }
             
             logger.info(f"Successfully parsed product ASIN {asin}")
